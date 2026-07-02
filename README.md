@@ -1,83 +1,34 @@
 # ACME SSL Manager
 
-A modern Bash menu for managing SSL certificates on Linux servers with [`acme.sh`](https://github.com/acmesh-official/acme.sh).
+یک اسکریپت منودار و ساده برای مدیریت SSL روی سرورهای لینوکسی با استفاده از `acme.sh`.
 
-This script is designed for VPS/server admins who want a simple terminal menu to issue, renew, remove, inspect, diagnose, repair, and back up SSL certificates.
+این ابزار برای دیدن، گرفتن، تمدید، حذف و بکاپ گرفتن از SSLها ساخته شده و برای سرورهایی که با x-ui، 3x-ui، HAProxy، Nginx، Apache یا Caddy کار می‌کنند مناسب است.
 
-Repository:
+> منوی خود اسکریپت انگلیسی است، چون خیلی از ترمینال‌های لینوکس فارسی را درست نمایش نمی‌دهند. توضیحات این فایل فارسی است.
+
+---
+
+## آدرس پروژه
 
 ```bash
 https://github.com/0fariid0/acme-ssl-manager
 ```
 
-Current version: `1.1.0`
-
 ---
 
-## Features
+## اجرای مستقیم از گیت‌هاب
 
-- Modern English terminal menu with colored UI
-- Automatic `acme.sh` installation if missing
-- Automatic installation of required tools such as `curl`, `openssl`, `ca-certificates`, and `socat`
-- View certificates managed by `acme.sh`
-- Show certificate expiration date and remaining time
-- Show installed certificate paths
-- Issue new SSL certificates
-- Renew one certificate
-- Renew all certificates
-- Remove certificates from `acme.sh`
-- Optional revoke before removing
-- Backup installed certificates
-- Diagnostics for ports `80` and `443`
-- ACME API connectivity preflight test
-- Network/TLS repair option for cURL/OpenSSL/CA certificate issues
-- Optional temporary Force IPv4 mode for ACME operations
-- Detect Apache, Nginx, Caddy, and HAProxy
-- Temporarily stop active web services before standalone SSL issuance
-- Restore only the services that were stopped by the script
-
----
-
-## Requirements
-
-Supported Linux distributions:
-
-- Ubuntu
-- Debian
-- AlmaLinux
-- Rocky Linux
-- CentOS
-- Fedora
-- Alpine Linux
-
-Required public ports:
-
-- `80` for HTTP-01 validation
-- `443` for TLS-ALPN-01 validation
-
-For normal Let's Encrypt HTTP validation, port `80` must be reachable from the internet.
-
----
-
-## Quick Run
-
-Run directly from GitHub:
+بعد از آپلود فایل‌ها روی گیت‌هاب، روی سرور بزن:
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/0fariid0/acme-ssl-manager/main/ssl-manager.sh)
 ```
 
-Alternative with `wget`:
-
-```bash
-bash <(wget -qO- https://raw.githubusercontent.com/0fariid0/acme-ssl-manager/main/ssl-manager.sh)
-```
-
 ---
 
-## Install as a Local Command
+## نصب به‌صورت دستور دائمی
 
-Install the manager as `sslmgr`:
+برای اینکه بعداً فقط با دستور `sslmgr` اجرا شود:
 
 ```bash
 curl -Ls -o /usr/local/bin/sslmgr https://raw.githubusercontent.com/0fariid0/acme-ssl-manager/main/ssl-manager.sh
@@ -85,7 +36,7 @@ chmod +x /usr/local/bin/sslmgr
 sslmgr
 ```
 
-After installation, you can open the menu anytime with:
+بعد از نصب، هر وقت خواستی منو باز شود:
 
 ```bash
 sslmgr
@@ -93,66 +44,154 @@ sslmgr
 
 ---
 
-## Manual Installation
+## گرفتن SSL با حالت سریع و پیش‌فرض
 
-Clone the repository:
+در نسخه جدید، گرفتن SSL دیگر چندین سؤال نمی‌پرسد. از منو گزینه زیر را بزن:
+
+```text
+2) Quick issue certificate (default)
+```
+
+بعد فقط دامنه را وارد کن:
+
+```text
+example.com
+```
+
+اگر چند دامنه یا ساب‌دامنه داری، با فاصله یا کاما وارد کن:
+
+```text
+example.com www.example.com sub.example.com
+```
+
+یا:
+
+```text
+example.com,www.example.com,sub.example.com
+```
+
+حالت سریع به‌صورت خودکار این تنظیمات را استفاده می‌کند:
+
+```text
+Challenge : HTTP-01 standalone
+Port      : 80
+Key type  : ECC ec-256
+Web stop  : Auto, enabled
+Network   : Auto IPv4/IPv6 detection
+Install   : /etc/acme-ssl-manager/certs/DOMAIN/
+```
+
+یعنی دیگر نمی‌پرسد HTTP یا ALPN، ECC یا RSA، خاموش کردن Apache/Nginx/HAProxy یا نه. همه چیز روی حالت پیشنهادی انجام می‌شود.
+
+---
+
+## گرفتن SSL فقط با یک دستور
+
+اگر دستور `sslmgr` را نصب کرده باشی، می‌توانی بدون باز کردن منو SSL بگیری:
 
 ```bash
-git clone https://github.com/0fariid0/acme-ssl-manager.git
-cd acme-ssl-manager
-chmod +x ssl-manager.sh
-./ssl-manager.sh
+sslmgr issue example.com
+```
+
+برای چند دامنه:
+
+```bash
+sslmgr issue example.com www.example.com sub.example.com
+```
+
+یا حتی مستقیم از گیت‌هاب:
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/0fariid0/acme-ssl-manager/main/ssl-manager.sh) issue example.com
 ```
 
 ---
 
-## Menu Options
+## حالت پیشرفته
+
+اگر بخواهی خودت نوع Challenge، نوع کلید یا خاموش/روشن شدن سرویس‌ها را انتخاب کنی، از منو گزینه زیر را بزن:
+
+```text
+3) Advanced issue certificate
+```
+
+در این حالت می‌توانی انتخاب کنی:
+
+```text
+1) HTTP-01 standalone on port 80
+2) TLS-ALPN-01 standalone on port 443
+```
+
+و همین‌طور نوع کلید:
+
+```text
+1) ECC ec-256
+2) RSA 2048
+```
+
+---
+
+## منوی اصلی
 
 ```text
 1) View certificates and remaining time
-2) Issue new certificate
-3) Renew one certificate
-4) Renew all certificates
-5) Remove certificate
-6) Show cert/key paths
-7) Backup certificates
-8) Diagnostics
-9) Install/Update local command: sslmgr
-10) Upgrade acme.sh
-11) Register/Update Let's Encrypt account email
-12) Network/TLS repair & ACME preflight
+2) Quick issue certificate (default)
+3) Advanced issue certificate
+4) Renew one certificate
+5) Renew all certificates
+6) Remove certificate
+7) Show cert/key paths
+8) Backup certificates
+9) Diagnostics
+10) Install/Update local command: sslmgr
+11) Upgrade acme.sh
+12) Register/Update Let's Encrypt account email
+13) Network/TLS repair & ACME preflight
 0) Exit
 ```
 
 ---
 
-## Certificate Paths
+## امکانات
 
-Issued certificates are installed here:
+- نصب خودکار `acme.sh`
+- نصب ابزارهای موردنیاز مثل `curl`، `openssl`، `socat` و `ca-certificates`
+- گرفتن SSL سریع فقط با وارد کردن دامنه
+- گرفتن SSL پیشرفته با تنظیمات دستی
+- نمایش SSLهای موجود روی سرور
+- نمایش تاریخ انقضا و زمان باقی‌مانده هر SSL
+- تمدید یک SSL مشخص
+- تمدید همه SSLها
+- حذف SSL از acme.sh و مسیر نصب‌شده
+- گرفتن بکاپ از SSLها
+- نمایش مسیر `private.key` و `fullchain.pem`
+- بررسی پورت‌های 80 و 443
+- بررسی سرویس‌های فعال مثل Apache، Nginx، Caddy و HAProxy
+- خاموش‌کردن موقت سرویس‌های وب هنگام گرفتن SSL
+- روشن‌کردن دوباره فقط همان سرویس‌هایی که اسکریپت خاموش کرده است
+- تعمیر خودکار مشکل‌های رایج شبکه، TLS و CA certificate
+- تشخیص مشکل IPv6 و استفاده خودکار از IPv4 با `--request-v4`
+
+---
+
+## مسیر ذخیره SSLها
+
+SSLهای نصب‌شده توسط این ابزار در مسیر زیر قرار می‌گیرند:
 
 ```bash
 /etc/acme-ssl-manager/certs/DOMAIN/
 ```
 
-Main files:
+مثلاً برای دامنه `example.com`:
 
 ```bash
-/etc/acme-ssl-manager/certs/DOMAIN/private.key
-/etc/acme-ssl-manager/certs/DOMAIN/fullchain.pem
-/etc/acme-ssl-manager/certs/DOMAIN/cert.pem
-/etc/acme-ssl-manager/certs/DOMAIN/ca.pem
+/etc/acme-ssl-manager/certs/example.com/private.key
+/etc/acme-ssl-manager/certs/example.com/fullchain.pem
+/etc/acme-ssl-manager/certs/example.com/cert.pem
+/etc/acme-ssl-manager/certs/example.com/ca.pem
 ```
 
-For most panels such as x-ui, 3x-ui, Nginx, HAProxy, and similar tools, you usually need:
-
-```bash
-Private Key: /etc/acme-ssl-manager/certs/DOMAIN/private.key
-Full Chain:  /etc/acme-ssl-manager/certs/DOMAIN/fullchain.pem
-```
-
-Replace `DOMAIN` with your real domain name.
-
-Example:
+برای بیشتر پنل‌ها معمولاً همین دو مسیر کافی است:
 
 ```bash
 /etc/acme-ssl-manager/certs/example.com/private.key
@@ -161,86 +200,45 @@ Example:
 
 ---
 
-## Troubleshooting: Could not get nonce / cURL error 35
+## تمدید SSL
 
-If you see an error like this:
-
-```text
-Could not get nonce
-Please refer to https://curl.haxx.se/libcurl/c/libcurl-errors.html for error code: 35
-Error creating new order. Le_OrderFinalize not found.
-```
-
-This usually means the server could not connect to the Let's Encrypt ACME API over HTTPS. It often happens because of one of these issues:
-
-- Broken or outdated CA certificates
-- Old curl/OpenSSL packages
-- Server time is wrong
-- IPv6 is broken, but the server tries IPv6 first
-- Provider firewall blocks outbound HTTPS to Let's Encrypt
-- Temporary Let's Encrypt/API connectivity issue
-
-Use this menu option first:
+برای تمدید یک SSL:
 
 ```text
-12) Network/TLS repair & ACME preflight
+4) Renew one certificate
 ```
 
-Then try issuing the certificate again. If the preflight says IPv4 works but IPv6 fails, answer `y` when the script asks:
+برای تمدید همه SSLها:
 
 ```text
-Force IPv4 for outgoing ACME API requests? [y/N]: y
+5) Renew all certificates
 ```
 
-Manual repair commands for Debian/Ubuntu:
-
-```bash
-apt-get update
-apt-get install -y curl openssl ca-certificates socat
-update-ca-certificates
-timedatectl set-ntp true
-~/.acme.sh/acme.sh --upgrade
-~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
-```
-
-Manual connectivity tests:
-
-```bash
-curl -Iv https://acme-v02.api.letsencrypt.org/directory
-curl -4Iv https://acme-v02.api.letsencrypt.org/directory
-curl -6Iv https://acme-v02.api.letsencrypt.org/directory
-```
+`acme.sh` معمولاً خودش کرون‌جاب تمدید خودکار نصب می‌کند، اما این منو برای مدیریت دستی و بررسی راحت‌تر است.
 
 ---
 
-## Important Notes
+## حذف SSL
 
-### Port 80
+برای حذف SSL:
 
-For HTTP-01 validation, Let's Encrypt must be able to reach your server on public port `80`.
+```text
+6) Remove certificate
+```
 
-If another service is using port `80`, this script can temporarily stop common web services such as Apache, Nginx, Caddy, or HAProxy while issuing the certificate.
-
-After the certificate operation finishes, the script restores only the services that it stopped.
-
-### Port 443
-
-For TLS-ALPN-01 validation, public port `443` must be reachable.
-
-### Cloudflare
-
-If your domain is behind Cloudflare proxy, standalone HTTP validation may fail depending on your configuration.
-
-Recommended options:
-
-- Temporarily turn off the orange cloud proxy and use DNS-only mode
-- Or use a DNS API validation method manually through `acme.sh`
+اسکریپت قبل از حذف تأیید می‌گیرد. اگر لازم باشد، می‌توانی قبل از حذف SSL را revoke هم بکنی.
 
 ---
 
-## Backup Location
+## بکاپ گرفتن
 
-Backups are stored here:
+برای گرفتن بکاپ از SSLها:
+
+```text
+8) Backup certificates
+```
+
+بکاپ‌ها در این مسیر ذخیره می‌شوند:
 
 ```bash
 /etc/acme-ssl-manager/backups/
@@ -248,49 +246,89 @@ Backups are stored here:
 
 ---
 
-## Update acme.sh
+## استفاده برای x-ui / 3x-ui / HAProxy / Nginx
 
-You can update `acme.sh` from inside the menu:
+بعد از گرفتن SSL، از منو گزینه زیر را بزن:
 
 ```text
-10) Upgrade acme.sh
+7) Show cert/key paths
 ```
 
-Or manually:
+بعد مسیرها را داخل پنل یا کانفیگ خودت قرار بده:
 
 ```bash
-~/.acme.sh/acme.sh --upgrade
+/etc/acme-ssl-manager/certs/DOMAIN/private.key
+/etc/acme-ssl-manager/certs/DOMAIN/fullchain.pem
 ```
 
 ---
 
-## Uninstall Local Command
+## حل خطای Could not get nonce / curl error 35
 
-To remove only the local command:
+اگر هنگام گرفتن SSL خطایی شبیه این دیدی:
 
-```bash
-rm -f /usr/local/bin/sslmgr
+```text
+Could not get nonce
+curl error code: 35
+Le_OrderFinalize not found
 ```
 
-This does not remove certificates or `acme.sh`.
+این خطا معمولاً قبل از مرحله بررسی دامنه رخ می‌دهد. یعنی سرور هنوز به مرحله تأیید پورت 80 یا 443 نرسیده و مشکل از اتصال خروجی سرور به API لتسنکریپت، TLS، CA certificate، ساعت سرور یا IPv6 است.
+
+برای تعمیر از منو بزن:
+
+```text
+13) Network/TLS repair & ACME preflight
+```
+
+اگر IPv4 کار کند ولی IPv6 خراب باشد، اسکریپت خودش به صورت خودکار از این حالت استفاده می‌کند:
+
+```bash
+--request-v4 --listen-v4
+```
+
+اگر هم IPv4 و هم IPv6 به API لتسنکریپت وصل نشوند، اسکریپت قبل از خاموش‌کردن سرویس‌ها عملیات را متوقف می‌کند تا سرور الکی دچار قطعی نشود.
 
 ---
 
-## Safety Behavior
+## تست دستی اتصال به لتسنکریپت
 
-The script does not blindly restart all services.
+اگر هنوز مشکل داشتی، این دستورها را روی سرور تست کن:
 
-When issuing or renewing certificates in standalone mode:
+```bash
+curl -Iv https://acme-v02.api.letsencrypt.org/directory
+curl -4Iv https://acme-v02.api.letsencrypt.org/directory
+curl -6Iv https://acme-v02.api.letsencrypt.org/directory
+curl -4Iv https://acme-v02.api.letsencrypt.org/acme/new-nonce
+curl -6Iv https://acme-v02.api.letsencrypt.org/acme/new-nonce
+```
 
-1. It checks which web services are active.
-2. It stops only the active services that may block the required port.
-3. It runs the certificate operation.
-4. It starts only the services that were stopped by the script.
+اگر هیچ‌کدام جواب نداد، مشکل از شبکه خروجی سرور، DNS، فایروال دیتاسنتر، تحریم/فیلتر مسیر، CA certificate یا ساعت سرور است.
 
-This avoids accidentally starting disabled services.
+---
+
+## آپدیت اسکریپت
+
+اگر فایل جدید را روی گیت‌هاب آپلود کردی و قبلاً دستور `sslmgr` را نصب کرده بودی، برای آپدیت بزن:
+
+```bash
+curl -Ls -o /usr/local/bin/sslmgr https://raw.githubusercontent.com/0fariid0/acme-ssl-manager/main/ssl-manager.sh
+chmod +x /usr/local/bin/sslmgr
+sslmgr
+```
+
+---
+
+## نکته‌های مهم
+
+- دامنه باید به IP همین سرور اشاره کند.
+- برای حالت سریع، پورت عمومی 80 باید از بیرون باز باشد.
+- اگر Cloudflare روشن است، برای گرفتن SSL بهتر است موقتاً Proxy را خاموش کنی و رکورد را روی DNS Only بگذاری.
+- اگر سرور IPv6 خراب دارد، اسکریپت تلاش می‌کند با IPv4 ادامه دهد.
+- اگر اتصال خروجی سرور به لتسنکریپت قطع باشد، هیچ اسکریپتی نمی‌تواند SSL بگیرد تا مشکل شبکه حل شود.
 
 ---
 
 ## License
 
-MIT License
+MIT

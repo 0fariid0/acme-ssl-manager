@@ -7,13 +7,17 @@
 set -o pipefail
 
 APP_NAME="ACME SSL Manager"
-APP_VERSION="1.1.0"
+APP_VERSION="1.3.0"
 ACME_HOME="${ACME_HOME:-$HOME/.acme.sh}"
 ACME_BIN="${ACME_BIN:-$ACME_HOME/acme.sh}"
 CERT_BASE="${CERT_BASE:-/etc/acme-ssl-manager/certs}"
 BACKUP_BASE="${BACKUP_BASE:-/etc/acme-ssl-manager/backups}"
 MANAGER_BIN="/usr/local/bin/sslmgr"
 DEFAULT_CA="letsencrypt"
+# Default one-click issuing settings. Advanced mode is still available from the menu.
+DEFAULT_CHALLENGE_MODE="http"      # http = HTTP-01 standalone on port 80
+DEFAULT_KEY_LENGTH="ec-256"        # ECC ec-256
+DEFAULT_AUTO_STOP="yes"            # stop/restart active web services automatically
 WEB_SERVICES=(apache2 httpd nginx caddy haproxy)
 STOPPED_SERVICES=()
 
@@ -112,84 +116,142 @@ ensure_acme() {
 }
 
 
+
 le_api_url() {
   echo "https://acme-v02.api.letsencrypt.org/directory"
 }
 
-curl_head_test() {
-  local ipver="$1" label="$2" url
-  url="$(le_api_url)"
-  if curl "$ipver" -fsSI --connect-timeout 10 --max-time 20 "$url" >/dev/null 2>&1; then
-    ok "ACME API reachable with $label"
-    return 0
+le_nonce_url() {
+  echo "https://acme-v02.api.letsencrypt.org/acme/new-nonce"
+}
+
+curl_acme_test() {
+  local ipver="$1" label="$2"
+  local dir_url nonce_url
+  dir_url="$(le_api_url)"
+  nonce_url="$(le_nonce_url)"
+
+  local ipopt=()
+  [[ -n "$ipver" ]] && ipopt+=("$ipver")
+
+  # Directory is a GET endpoint. Some setups fail or behave differently with HEAD, so do not use -I here.
+  if ! curl "${ipopt[@]}" -fsSL --connect-timeout 10 --max-time 25 "$dir_url" >/dev/null 2>&1; then
+    warn "ACME directory is NOT reachable with $label"
+    return 1
   fi
-  warn "ACME API is NOT reachable with $label"
-  return 1
+
+  # The nonce endpoint is the exact step that often fails with: Could not get nonce.
+  if ! curl "${ipopt[@]}" -fsSI --connect-timeout 10 --max-time 25 "$nonce_url" >/dev/null 2>&1; then
+    warn "ACME new-nonce endpoint is NOT reachable with $label"
+    return 1
+  fi
+
+  ok "ACME API and nonce endpoint reachable with $label"
+  return 0
 }
 
 preflight_acme_api() {
   say "${C_BOLD}ACME API preflight${C_RESET}"
   line
-  if curl -fsSI --connect-timeout 10 --max-time 20 "$(le_api_url)" >/dev/null 2>&1; then
-    ok "ACME API reachable with default network stack"
+  if curl_acme_test "" "default network stack"; then
     return 0
   fi
+
   warn "Default connection to Let's Encrypt failed. Testing IPv4/IPv6 separately..."
   local v4=1 v6=1
-  curl_head_test -4 IPv4; v4=$?
-  curl_head_test -6 IPv6; v6=$?
+  curl_acme_test -4 IPv4; v4=$?
+  curl_acme_test -6 IPv6; v6=$?
+
   if [[ "$v4" == 0 && "$v6" != 0 ]]; then
-    warn "IPv4 works but IPv6 fails. Use Force IPv4 for this operation."
+    warn "IPv4 works but IPv6 fails. The script will use acme.sh --request-v4 automatically."
     return 2
   fi
   if [[ "$v4" != 0 && "$v6" == 0 ]]; then
-    warn "IPv6 works but IPv4 fails. Your provider/network may block IPv4 egress to Let's Encrypt."
+    warn "IPv6 works but IPv4 fails. The script can continue with the default/IPv6 path."
     return 3
   fi
-  err "Could not reach Let's Encrypt ACME API. This is an outbound network/TLS problem."
-  warn "Try: apt-get update && apt-get install -y ca-certificates curl openssl && update-ca-certificates"
-  warn "Also check server time: timedatectl"
+
+  err "Could not reach Let's Encrypt ACME API or nonce endpoint with IPv4 or IPv6."
+  warn "This must be fixed before issuing/renewing certificates. The domain validation step has not started yet."
   return 1
 }
 
-ask_force_ipv4() {
-  local ans
-  read -rp "Force IPv4 for outgoing ACME API requests? [y/N]: " ans
-  [[ "$ans" =~ ^[Yy] ]] && echo "yes" || echo "no"
+auto_network_repair_quiet() {
+  warn "Running automatic Network/TLS repair before retrying preflight..."
+  if command_exists apt-get; then
+    DEBIAN_FRONTEND=noninteractive apt-get update || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y curl openssl ca-certificates socat tzdata
+    update-ca-certificates >/dev/null 2>&1 || true
+  elif command_exists dnf; then
+    dnf install -y curl openssl ca-certificates socat tzdata
+    update-ca-trust >/dev/null 2>&1 || true
+  elif command_exists yum; then
+    yum install -y curl openssl ca-certificates socat tzdata
+    update-ca-trust >/dev/null 2>&1 || true
+  elif command_exists apk; then
+    apk add --no-cache curl openssl ca-certificates socat tzdata
+    update-ca-certificates >/dev/null 2>&1 || true
+  else
+    warn "Unsupported package manager. Install curl openssl ca-certificates socat manually."
+  fi
+
+  if command_exists timedatectl; then
+    timedatectl set-ntp true >/dev/null 2>&1 || true
+  fi
+
+  if [[ -x "$ACME_BIN" ]]; then
+    "$ACME_BIN" --upgrade >/dev/null 2>&1 || true
+    "$ACME_BIN" --set-default-ca --server "$DEFAULT_CA" >/dev/null 2>&1 || true
+  fi
 }
 
-with_optional_ipv4_curlrc() {
-  local force_ipv4="$1"
-  shift
-  local rc curlrc backup temp_had=0 backup_had=0
-  curlrc="$HOME/.curlrc"
-  backup="/tmp/sslmgr-curlrc-backup-$$"
+ACME_IP_MODE="auto"
 
-  if [[ "$force_ipv4" == "yes" ]]; then
-    warn "Temporarily forcing curl/acme.sh to use IPv4 for this operation..."
-    if [[ -f "$curlrc" ]]; then
-      cp -a "$curlrc" "$backup"
-      backup_had=1
-    else
-      : > "$curlrc"
-      temp_had=1
-    fi
-    if ! grep -Eq '^[[:space:]]*(--ipv4|-4|ipv4)[[:space:]]*$' "$curlrc" 2>/dev/null; then
-      printf '\n--ipv4\n' >> "$curlrc"
-    fi
-  fi
-
-  "$@"
+prepare_acme_network_or_abort() {
+  local allow_repair="${1:-yes}" rc
+  ACME_IP_MODE="auto"
+  preflight_acme_api
   rc=$?
 
-  if [[ "$force_ipv4" == "yes" ]]; then
-    if [[ "$backup_had" == 1 ]]; then
-      mv -f "$backup" "$curlrc"
-    elif [[ "$temp_had" == 1 ]]; then
-      rm -f "$curlrc"
-    fi
+  case "$rc" in
+    0) ACME_IP_MODE="auto"; return 0 ;;
+    2) ACME_IP_MODE="v4"; return 0 ;;
+    3) ACME_IP_MODE="auto"; return 0 ;;
+  esac
+
+  if [[ "$allow_repair" == "yes" ]]; then
+    auto_network_repair_quiet
+    echo
+    preflight_acme_api
+    rc=$?
+    case "$rc" in
+      0) ACME_IP_MODE="auto"; return 0 ;;
+      2) ACME_IP_MODE="v4"; return 0 ;;
+      3) ACME_IP_MODE="auto"; return 0 ;;
+    esac
   fi
-  return $rc
+
+  ACME_IP_MODE="fail"
+  return 1
+}
+
+acme_net_args() {
+  local mode="$1" ipmode="$2"
+  case "$ipmode" in
+    v4)
+      printf '%s\0' --request-v4
+      # For standalone validation, also bind the temporary challenge server on IPv4.
+      if [[ "$mode" == "http" || "$mode" == "alpn" ]]; then
+        printf '%s\0' --listen-v4
+      fi
+      ;;
+    v6)
+      printf '%s\0' --request-v6
+      if [[ "$mode" == "http" || "$mode" == "alpn" ]]; then
+        printf '%s\0' --listen-v6
+      fi
+      ;;
+  esac
 }
 
 run_acme_logged() {
@@ -201,7 +263,7 @@ run_acme_logged() {
     if grep -Eqi 'Could not get nonce|error code: 35|SSL connect|Le_OrderFinalize not found' "$tmp"; then
       echo
       err "acme.sh failed before domain validation. This is usually outbound HTTPS/TLS connectivity to Let's Encrypt."
-      warn "Run Diagnostics/Repair from the menu, then try again with Force IPv4 enabled."
+      warn "The script already tested ACME API before this step. Run option 12 and check provider firewall/DNS/TLS if this repeats."
     fi
   fi
   rm -f "$tmp"
@@ -431,28 +493,86 @@ install_cert_to_path() {
 }
 
 issue_cert_inner() {
-  local mode="$1" keylength="$2" main="$3"
-  shift 3
-  local domain_args=("$@")
+  local mode="$1" keylength="$2" ipmode="$3" main="$4"
+  shift 4
+  local domain_args=("$@") net_args=() item
+  while IFS= read -r -d '' item; do net_args+=("$item"); done < <(acme_net_args "$mode" "$ipmode")
   if [[ "$mode" == "http" ]]; then
-    run_acme_logged --issue --server "$DEFAULT_CA" --standalone --keylength "$keylength" "${domain_args[@]}"
+    run_acme_logged --issue --server "$DEFAULT_CA" "${net_args[@]}" --standalone --keylength "$keylength" "${domain_args[@]}"
   else
-    run_acme_logged --issue --server "$DEFAULT_CA" --alpn --keylength "$keylength" "${domain_args[@]}"
+    run_acme_logged --issue --server "$DEFAULT_CA" "${net_args[@]}" --alpn --keylength "$keylength" "${domain_args[@]}"
+  fi
+}
+
+issue_cert_core() {
+  local raw_domains="$1" mode="$2" keylength="$3" auto_stop="$4" pause_after="${5:-yes}"
+  raw_domains="$(echo "$raw_domains" | xargs)"
+  if [[ -z "$raw_domains" ]]; then
+    err "No domain entered."
+    [[ "$pause_after" == "yes" ]] && pause
+    return 1
+  fi
+
+  local first_domain item ipmode
+  first_domain="$(echo "$raw_domains" | tr ',' ' ' | awk '{print $1}')"
+
+  if ! prepare_acme_network_or_abort yes; then
+    echo
+    err "ACME API is still unreachable after automatic repair. Issuing was stopped before touching web services."
+    warn "Fix outbound HTTPS from this server to: $(le_api_url)"
+    warn "Useful checks: timedatectl ; curl -4Iv $(le_nonce_url) ; curl -6Iv $(le_nonce_url)"
+    [[ "$pause_after" == "yes" ]] && pause
+    return 1
+  fi
+  ipmode="$ACME_IP_MODE"
+  if [[ "$ipmode" == "v4" ]]; then
+    ok "IPv4-only ACME mode enabled automatically: acme.sh --request-v4 --listen-v4"
+  fi
+
+  local args=()
+  while IFS= read -r -d '' item; do args+=("$item"); done < <(build_domain_args "$raw_domains")
+  if (( ${#args[@]} == 0 )); then
+    err "Could not parse domains."
+    [[ "$pause_after" == "yes" ]] && pause
+    return 1
+  fi
+
+  line
+  info "Issuing certificate for: $raw_domains"
+  info "Defaults: HTTP-01 port 80, ECC ec-256, auto-stop web services enabled"
+  if with_web_stop "$auto_stop" issue_cert_inner "$mode" "$keylength" "$ipmode" "$first_domain" "${args[@]}"; then
+    ok "Certificate issued. Installing copy to $CERT_BASE..."
+    install_cert_to_path "$first_domain" "$keylength" && ok "Installed: $CERT_BASE/$(safe_domain_name "$first_domain")"
+    [[ "$pause_after" == "yes" ]] && pause
+    return 0
+  else
+    err "Certificate issue failed. Check DNS A/AAAA records and open port 80/443."
+    [[ "$pause_after" == "yes" ]] && pause
+    return 1
   fi
 }
 
 issue_cert() {
   header
   ensure_acme || { pause; return; }
-  say "${C_BOLD}Issue new certificate${C_RESET}"
+  say "${C_BOLD}Quick issue certificate${C_RESET}"
+  line
+  say "This mode asks only for domain(s)."
+  say "Defaults: HTTP-01 on port 80, ECC ec-256, auto-stop Apache/Nginx/Caddy/HAProxy."
+  echo
+  read -rp "Enter domain(s), separated by space or comma: " raw_domains
+  issue_cert_core "$raw_domains" "$DEFAULT_CHALLENGE_MODE" "$DEFAULT_KEY_LENGTH" "$DEFAULT_AUTO_STOP" yes
+}
+
+issue_cert_advanced() {
+  header
+  ensure_acme || { pause; return; }
+  say "${C_BOLD}Advanced issue certificate${C_RESET}"
   line
   warn "HTTP-01 standalone normally needs public port 80. TLS-ALPN needs public port 443."
   read -rp "Enter domain(s), separated by space or comma: " raw_domains
   raw_domains="$(echo "$raw_domains" | xargs)"
   [[ -z "$raw_domains" ]] && { err "No domain entered."; pause; return; }
-
-  local first_domain
-  first_domain="$(echo "$raw_domains" | tr ',' ' ' | awk '{print $1}')"
 
   say "Choose challenge mode:"
   say "  1) HTTP-01 standalone on port 80 (recommended)"
@@ -468,32 +588,9 @@ issue_cert() {
   local keylength="ec-256"
   [[ "$key_choice" == "2" ]] && keylength="2048"
 
-  local auto_stop force_ipv4 preflight_rc
+  local auto_stop
   auto_stop="$(ask_auto_stop)"
-  preflight_acme_api
-  preflight_rc=$?
-  if [[ "$preflight_rc" == 2 ]]; then
-    warn "Force IPv4 is recommended on this server."
-  fi
-  force_ipv4="$(ask_force_ipv4)"
-
-  local args=()
-  while IFS= read -r -d '' item; do args+=("$item"); done < <(build_domain_args "$raw_domains")
-  if (( ${#args[@]} == 0 )); then
-    err "Could not parse domains."
-    pause
-    return
-  fi
-
-  line
-  info "Issuing certificate for: $raw_domains"
-  if with_web_stop "$auto_stop" with_optional_ipv4_curlrc "$force_ipv4" issue_cert_inner "$mode" "$keylength" "$first_domain" "${args[@]}"; then
-    ok "Certificate issued. Installing copy to $CERT_BASE..."
-    install_cert_to_path "$first_domain" "$keylength" && ok "Installed: $CERT_BASE/$(safe_domain_name "$first_domain")"
-  else
-    err "Certificate issue failed. Check DNS A/AAAA records and open port 80/443."
-  fi
-  pause
+  issue_cert_core "$raw_domains" "$mode" "$keylength" "$auto_stop" yes
 }
 
 select_acme_cert() {
@@ -530,10 +627,11 @@ is_ecc_conf() {
 }
 
 renew_cert_inner() {
-  local domain="$1" ecc="$2" force="$3" args=(--renew -d "$domain")
+  local domain="$1" ecc="$2" force="$3" ipmode="$4" args=(--renew -d "$domain") net_args=() item
+  while IFS= read -r -d '' item; do net_args+=("$item"); done < <(acme_net_args "renew" "$ipmode")
   [[ "$ecc" == "yes" ]] && args+=(--ecc)
   [[ "$force" == "yes" ]] && args+=(--force)
-  run_acme_logged "${args[@]}"
+  run_acme_logged "${net_args[@]}" "${args[@]}"
 }
 
 renew_one() {
@@ -547,12 +645,19 @@ renew_one() {
   read -rp "Force renewal even if not due? [y/N]: " force_ans
   [[ "$force_ans" =~ ^[Yy] ]] && force="yes"
   auto_stop="$(ask_auto_stop)"
-  local force_ipv4
-  preflight_acme_api || true
-  force_ipv4="$(ask_force_ipv4)"
+  local ipmode
+  if ! prepare_acme_network_or_abort yes; then
+    echo
+    err "ACME API is still unreachable after automatic repair. Renewal was stopped before touching web services."
+    warn "Fix outbound HTTPS from this server to: $(le_api_url)"
+    pause
+    return
+  fi
+  ipmode="$ACME_IP_MODE"
+  [[ "$ipmode" == "v4" ]] && ok "IPv4-only ACME mode enabled automatically: acme.sh --request-v4"
   line
   info "Renewing: $domain"
-  if with_web_stop "$auto_stop" with_optional_ipv4_curlrc "$force_ipv4" renew_cert_inner "$domain" "$ecc" "$force"; then
+  if with_web_stop "$auto_stop" renew_cert_inner "$domain" "$ecc" "$force" "$ipmode"; then
     ok "Renew done. Re-installing copy to $CERT_BASE..."
     install_cert_to_path "$domain" "${key:-ec-256}" && ok "Installed copy updated."
   else
@@ -562,9 +667,10 @@ renew_one() {
 }
 
 renew_all_inner() {
-  local force="$1" args=(--renew-all)
+  local force="$1" ipmode="$2" args=(--renew-all) net_args=() item
+  while IFS= read -r -d '' item; do net_args+=("$item"); done < <(acme_net_args "renew" "$ipmode")
   [[ "$force" == "yes" ]] && args+=(--force)
-  run_acme_logged "${args[@]}"
+  run_acme_logged "${net_args[@]}" "${args[@]}"
 }
 
 renew_all() {
@@ -574,12 +680,19 @@ renew_all() {
   read -rp "Force renew all certificates? [y/N]: " force_ans
   [[ "$force_ans" =~ ^[Yy] ]] && force="yes"
   auto_stop="$(ask_auto_stop)"
-  local force_ipv4
-  preflight_acme_api || true
-  force_ipv4="$(ask_force_ipv4)"
+  local ipmode
+  if ! prepare_acme_network_or_abort yes; then
+    echo
+    err "ACME API is still unreachable after automatic repair. Renew-all was stopped before touching web services."
+    warn "Fix outbound HTTPS from this server to: $(le_api_url)"
+    pause
+    return
+  fi
+  ipmode="$ACME_IP_MODE"
+  [[ "$ipmode" == "v4" ]] && ok "IPv4-only ACME mode enabled automatically: acme.sh --request-v4"
   line
   info "Running renew-all..."
-  if with_web_stop "$auto_stop" with_optional_ipv4_curlrc "$force_ipv4" renew_all_inner "$force"; then
+  if with_web_stop "$auto_stop" renew_all_inner "$force" "$ipmode"; then
     ok "Renew-all finished."
   else
     err "Renew-all returned an error. Check output above."
@@ -786,37 +899,64 @@ main_menu() {
   while true; do
     header
     say "${C_BOLD}1)${C_RESET} View certificates and remaining time"
-    say "${C_BOLD}2)${C_RESET} Issue new certificate"
-    say "${C_BOLD}3)${C_RESET} Renew one certificate"
-    say "${C_BOLD}4)${C_RESET} Renew all certificates"
-    say "${C_BOLD}5)${C_RESET} Remove certificate"
-    say "${C_BOLD}6)${C_RESET} Show cert/key paths"
-    say "${C_BOLD}7)${C_RESET} Backup certificates"
-    say "${C_BOLD}8)${C_RESET} Diagnostics"
-    say "${C_BOLD}9)${C_RESET} Install/Update local command: sslmgr"
-    say "${C_BOLD}10)${C_RESET} Upgrade acme.sh"
-    say "${C_BOLD}11)${C_RESET} Register/Update Let's Encrypt account email"
-    say "${C_BOLD}12)${C_RESET} Network/TLS repair & ACME preflight"
+    say "${C_BOLD}2)${C_RESET} Quick issue certificate (default)"
+    say "${C_BOLD}3)${C_RESET} Advanced issue certificate"
+    say "${C_BOLD}4)${C_RESET} Renew one certificate"
+    say "${C_BOLD}5)${C_RESET} Renew all certificates"
+    say "${C_BOLD}6)${C_RESET} Remove certificate"
+    say "${C_BOLD}7)${C_RESET} Show cert/key paths"
+    say "${C_BOLD}8)${C_RESET} Backup certificates"
+    say "${C_BOLD}9)${C_RESET} Diagnostics"
+    say "${C_BOLD}10)${C_RESET} Install/Update local command: sslmgr"
+    say "${C_BOLD}11)${C_RESET} Upgrade acme.sh"
+    say "${C_BOLD}12)${C_RESET} Register/Update Let's Encrypt account email"
+    say "${C_BOLD}13)${C_RESET} Network/TLS repair & ACME preflight"
     say "${C_BOLD}0)${C_RESET} Exit"
     echo
     read -rp "Select an option: " choice
     case "$choice" in
       1) list_certs ;;
       2) issue_cert ;;
-      3) renew_one ;;
-      4) renew_all ;;
-      5) remove_cert ;;
-      6) show_paths ;;
-      7) backup_certs ;;
-      8) diagnostics ;;
-      9) install_manager_command ;;
-      10) upgrade_acme ;;
-      11) register_account ;;
-      12) network_repair ;;
+      3) issue_cert_advanced ;;
+      4) renew_one ;;
+      5) renew_all ;;
+      6) remove_cert ;;
+      7) show_paths ;;
+      8) backup_certs ;;
+      9) diagnostics ;;
+      10) install_manager_command ;;
+      11) upgrade_acme ;;
+      12) register_account ;;
+      13) network_repair ;;
       0) exit 0 ;;
       *) warn "Invalid option"; sleep 1 ;;
     esac
   done
 }
 
-main_menu "$@"
+quick_issue_from_cli() {
+  need_root
+  ensure_acme || return 1
+  local raw_domains="$*"
+  if [[ -z "$(echo "$raw_domains" | xargs)" ]]; then
+    err "Usage: sslmgr issue example.com [www.example.com]"
+    return 1
+  fi
+  issue_cert_core "$raw_domains" "$DEFAULT_CHALLENGE_MODE" "$DEFAULT_KEY_LENGTH" "$DEFAULT_AUTO_STOP" no
+}
+
+case "${1:-}" in
+  issue|quick|--issue)
+    shift
+    quick_issue_from_cli "$@"
+    ;;
+  help|--help|-h)
+    echo "$APP_NAME v$APP_VERSION"
+    echo "Usage:"
+    echo "  sslmgr                    Open menu"
+    echo "  sslmgr issue example.com  Issue SSL with default quick mode"
+    ;;
+  *)
+    main_menu "$@"
+    ;;
+esac
