@@ -6,10 +6,11 @@
 set -o pipefail
 
 APP_NAME="ACME SSL Manager"
-APP_VERSION="1.7.0"
+APP_VERSION="1.8.0"
 ACME_HOME="${ACME_HOME:-$HOME/.acme.sh}"
 ACME_BIN="${ACME_BIN:-$ACME_HOME/acme.sh}"
-CERT_BASE="${CERT_BASE:-/etc/acme-ssl-manager/certs}"
+CERT_BASE="${CERT_BASE:-/root/cert}"
+OLD_CERT_BASE="${OLD_CERT_BASE:-/etc/acme-ssl-manager/certs}"
 BACKUP_BASE="${BACKUP_BASE:-/etc/acme-ssl-manager/backups}"
 MANAGER_BIN="/usr/local/bin/sslmgr"
 DEFAULT_CA="letsencrypt"
@@ -37,8 +38,9 @@ if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
   C_MUTED=$'\033[38;5;240m'
   C_ACCENT=$'\033[38;5;45m'
   C_ACCENT2=$'\033[38;5;99m'
+  C_PATH=$'\033[38;5;51m'
 else
-  C_RESET=''; C_BOLD=''; C_DIM=''; C_RED=''; C_GREEN=''; C_YELLOW=''; C_BLUE=''; C_MAGENTA=''; C_CYAN=''; C_WHITE=''; C_SOFT=''; C_MUTED=''; C_ACCENT=''; C_ACCENT2=''
+  C_RESET=''; C_BOLD=''; C_DIM=''; C_RED=''; C_GREEN=''; C_YELLOW=''; C_BLUE=''; C_MAGENTA=''; C_CYAN=''; C_WHITE=''; C_SOFT=''; C_MUTED=''; C_ACCENT=''; C_ACCENT2=''; C_PATH=''
 fi
 
 say() { echo -e "$*"; }
@@ -102,6 +104,41 @@ pkg_install() {
   fi
 }
 
+migrate_old_cert_copies() {
+  # Previous versions installed managed copies under /etc/acme-ssl-manager/certs.
+  # Keep acme.sh records untouched, but move/copy the panel-ready files to the new main path.
+  [[ "$CERT_BASE" == "$OLD_CERT_BASE" ]] && return 0
+  [[ -d "$OLD_CERT_BASE" ]] || return 0
+
+  mkdir -p "$CERT_BASE"
+  local olddir domain dest file migrated=0
+  for olddir in "$OLD_CERT_BASE"/*; do
+    [[ -d "$olddir" ]] || continue
+    domain="$(basename "$olddir")"
+    [[ -n "$domain" ]] || continue
+    dest="$CERT_BASE/$domain"
+    mkdir -p "$dest"
+    for file in fullchain.pem private.key cert.pem ca.pem; do
+      if [[ -f "$olddir/$file" && ! -f "$dest/$file" ]]; then
+        cp -a "$olddir/$file" "$dest/$file" 2>/dev/null && migrated=1
+      fi
+    done
+  done
+
+  if (( migrated == 1 )); then
+    ok "Old managed certificate copies migrated to: $CERT_BASE"
+  fi
+}
+
+print_plain_copy_paths() {
+  local domain="$1" safe dest
+  safe="$(safe_domain_name "$domain")"
+  dest="$CERT_BASE/$safe"
+  echo
+  printf "%b%s%b\n" "${C_PATH}${C_BOLD}" "$dest/fullchain.pem" "${C_RESET}"
+  printf "%b%s%b\n" "${C_PATH}${C_BOLD}" "$dest/private.key" "${C_RESET}"
+}
+
 ensure_tools() {
   local missing=()
   for bin in curl openssl socat tar awk sed grep date getent; do
@@ -114,6 +151,7 @@ ensure_tools() {
     command_exists update-ca-certificates && update-ca-certificates >/dev/null 2>&1 || true
   fi
   mkdir -p "$CERT_BASE" "$BACKUP_BASE"
+  migrate_old_cert_copies
 }
 
 ensure_acme() {
@@ -647,7 +685,10 @@ issue_cert_core() {
   info "Defaults: HTTP-01 port 80, ECC ec-256, auto-stop web services enabled"
   if with_web_stop "$auto_stop" issue_cert_inner "$mode" "$keylength" "$ipmode" "$first_domain" "${args[@]}"; then
     ok "Certificate issued. Installing copy to $CERT_BASE..."
-    install_cert_to_path "$first_domain" "$keylength" && ok "Installed: $CERT_BASE/$(safe_domain_name "$first_domain")"
+    if install_cert_to_path "$first_domain" "$keylength"; then
+      ok "Installed: $CERT_BASE/$(safe_domain_name "$first_domain")"
+      print_plain_copy_paths "$first_domain"
+    fi
     [[ "$pause_after" == "yes" ]] && pause
     return 0
   else
@@ -762,7 +803,10 @@ renew_one() {
   info "Defaults: normal acme.sh renew, auto-stop web services enabled"
   if with_web_stop "$auto_stop" renew_cert_inner "$domain" "$ecc" "$force" "$ipmode"; then
     ok "Renew done. Re-installing copy to $CERT_BASE..."
-    install_cert_to_path "$domain" "${key:-ec-256}" && ok "Installed copy updated."
+    if install_cert_to_path "$domain" "${key:-ec-256}"; then
+      ok "Installed copy updated."
+      print_plain_copy_paths "$domain"
+    fi
   else
     err "Renew failed."
   fi
