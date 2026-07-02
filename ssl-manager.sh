@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # SSL Manager for acme.sh
 # GitHub-ready standalone Bash TUI
-# Author: 0fariid0
-# Repository: https://github.com/0fariid0/acme-ssl-manager
+# Author: your-name
 # License: MIT
 
 set -o pipefail
 
 APP_NAME="ACME SSL Manager"
-APP_VERSION="1.0.0"
+APP_VERSION="1.1.0"
 ACME_HOME="${ACME_HOME:-$HOME/.acme.sh}"
 ACME_BIN="${ACME_BIN:-$ACME_HOME/acme.sh}"
 CERT_BASE="${CERT_BASE:-/etc/acme-ssl-manager/certs}"
@@ -86,13 +85,14 @@ pkg_install() {
 
 ensure_tools() {
   local missing=()
-  for bin in curl openssl socat tar awk sed grep date; do
+  for bin in curl openssl socat tar awk sed grep date getent; do
     command_exists "$bin" || missing+=("$bin")
   done
   if (( ${#missing[@]} > 0 )); then
     info "Installing required tools. Missing commands: ${missing[*]}"
     # Use package names, not command names, because some commands come from core packages.
-    pkg_install curl openssl socat tar coreutils grep sed gawk iproute2 net-tools || return 1
+    pkg_install curl openssl ca-certificates socat tar coreutils grep sed gawk iproute2 net-tools || return 1
+    command_exists update-ca-certificates && update-ca-certificates >/dev/null 2>&1 || true
   fi
   mkdir -p "$CERT_BASE" "$BACKUP_BASE"
 }
@@ -109,6 +109,103 @@ ensure_acme() {
   fi
   "$ACME_BIN" --set-default-ca --server "$DEFAULT_CA" >/dev/null 2>&1 || true
   ok "acme.sh is ready: $ACME_BIN"
+}
+
+
+le_api_url() {
+  echo "https://acme-v02.api.letsencrypt.org/directory"
+}
+
+curl_head_test() {
+  local ipver="$1" label="$2" url
+  url="$(le_api_url)"
+  if curl "$ipver" -fsSI --connect-timeout 10 --max-time 20 "$url" >/dev/null 2>&1; then
+    ok "ACME API reachable with $label"
+    return 0
+  fi
+  warn "ACME API is NOT reachable with $label"
+  return 1
+}
+
+preflight_acme_api() {
+  say "${C_BOLD}ACME API preflight${C_RESET}"
+  line
+  if curl -fsSI --connect-timeout 10 --max-time 20 "$(le_api_url)" >/dev/null 2>&1; then
+    ok "ACME API reachable with default network stack"
+    return 0
+  fi
+  warn "Default connection to Let's Encrypt failed. Testing IPv4/IPv6 separately..."
+  local v4=1 v6=1
+  curl_head_test -4 IPv4; v4=$?
+  curl_head_test -6 IPv6; v6=$?
+  if [[ "$v4" == 0 && "$v6" != 0 ]]; then
+    warn "IPv4 works but IPv6 fails. Use Force IPv4 for this operation."
+    return 2
+  fi
+  if [[ "$v4" != 0 && "$v6" == 0 ]]; then
+    warn "IPv6 works but IPv4 fails. Your provider/network may block IPv4 egress to Let's Encrypt."
+    return 3
+  fi
+  err "Could not reach Let's Encrypt ACME API. This is an outbound network/TLS problem."
+  warn "Try: apt-get update && apt-get install -y ca-certificates curl openssl && update-ca-certificates"
+  warn "Also check server time: timedatectl"
+  return 1
+}
+
+ask_force_ipv4() {
+  local ans
+  read -rp "Force IPv4 for outgoing ACME API requests? [y/N]: " ans
+  [[ "$ans" =~ ^[Yy] ]] && echo "yes" || echo "no"
+}
+
+with_optional_ipv4_curlrc() {
+  local force_ipv4="$1"
+  shift
+  local rc curlrc backup temp_had=0 backup_had=0
+  curlrc="$HOME/.curlrc"
+  backup="/tmp/sslmgr-curlrc-backup-$$"
+
+  if [[ "$force_ipv4" == "yes" ]]; then
+    warn "Temporarily forcing curl/acme.sh to use IPv4 for this operation..."
+    if [[ -f "$curlrc" ]]; then
+      cp -a "$curlrc" "$backup"
+      backup_had=1
+    else
+      : > "$curlrc"
+      temp_had=1
+    fi
+    if ! grep -Eq '^[[:space:]]*(--ipv4|-4|ipv4)[[:space:]]*$' "$curlrc" 2>/dev/null; then
+      printf '\n--ipv4\n' >> "$curlrc"
+    fi
+  fi
+
+  "$@"
+  rc=$?
+
+  if [[ "$force_ipv4" == "yes" ]]; then
+    if [[ "$backup_had" == 1 ]]; then
+      mv -f "$backup" "$curlrc"
+    elif [[ "$temp_had" == 1 ]]; then
+      rm -f "$curlrc"
+    fi
+  fi
+  return $rc
+}
+
+run_acme_logged() {
+  local tmp rc
+  tmp="/tmp/sslmgr-acme-$$.log"
+  "$ACME_BIN" "$@" 2>&1 | tee "$tmp"
+  rc=${PIPESTATUS[0]}
+  if [[ $rc -ne 0 ]]; then
+    if grep -Eqi 'Could not get nonce|error code: 35|SSL connect|Le_OrderFinalize not found' "$tmp"; then
+      echo
+      err "acme.sh failed before domain validation. This is usually outbound HTTPS/TLS connectivity to Let's Encrypt."
+      warn "Run Diagnostics/Repair from the menu, then try again with Force IPv4 enabled."
+    fi
+  fi
+  rm -f "$tmp"
+  return $rc
 }
 
 service_exists() {
@@ -325,7 +422,7 @@ install_cert_to_path() {
   if [[ "$keylength" == ec-* || "$keylength" == "ecc" ]]; then
     ecc_flag=(--ecc)
   fi
-  "$ACME_BIN" --install-cert -d "$main" "${ecc_flag[@]}" \
+  run_acme_logged --install-cert -d "$main" "${ecc_flag[@]}" \
     --key-file "$dest/private.key" \
     --cert-file "$dest/cert.pem" \
     --ca-file "$dest/ca.pem" \
@@ -338,9 +435,9 @@ issue_cert_inner() {
   shift 3
   local domain_args=("$@")
   if [[ "$mode" == "http" ]]; then
-    "$ACME_BIN" --issue --server "$DEFAULT_CA" --standalone --keylength "$keylength" "${domain_args[@]}"
+    run_acme_logged --issue --server "$DEFAULT_CA" --standalone --keylength "$keylength" "${domain_args[@]}"
   else
-    "$ACME_BIN" --issue --server "$DEFAULT_CA" --alpn --keylength "$keylength" "${domain_args[@]}"
+    run_acme_logged --issue --server "$DEFAULT_CA" --alpn --keylength "$keylength" "${domain_args[@]}"
   fi
 }
 
@@ -371,8 +468,14 @@ issue_cert() {
   local keylength="ec-256"
   [[ "$key_choice" == "2" ]] && keylength="2048"
 
-  local auto_stop
+  local auto_stop force_ipv4 preflight_rc
   auto_stop="$(ask_auto_stop)"
+  preflight_acme_api
+  preflight_rc=$?
+  if [[ "$preflight_rc" == 2 ]]; then
+    warn "Force IPv4 is recommended on this server."
+  fi
+  force_ipv4="$(ask_force_ipv4)"
 
   local args=()
   while IFS= read -r -d '' item; do args+=("$item"); done < <(build_domain_args "$raw_domains")
@@ -384,7 +487,7 @@ issue_cert() {
 
   line
   info "Issuing certificate for: $raw_domains"
-  if with_web_stop "$auto_stop" issue_cert_inner "$mode" "$keylength" "$first_domain" "${args[@]}"; then
+  if with_web_stop "$auto_stop" with_optional_ipv4_curlrc "$force_ipv4" issue_cert_inner "$mode" "$keylength" "$first_domain" "${args[@]}"; then
     ok "Certificate issued. Installing copy to $CERT_BASE..."
     install_cert_to_path "$first_domain" "$keylength" && ok "Installed: $CERT_BASE/$(safe_domain_name "$first_domain")"
   else
@@ -430,7 +533,7 @@ renew_cert_inner() {
   local domain="$1" ecc="$2" force="$3" args=(--renew -d "$domain")
   [[ "$ecc" == "yes" ]] && args+=(--ecc)
   [[ "$force" == "yes" ]] && args+=(--force)
-  "$ACME_BIN" "${args[@]}"
+  run_acme_logged "${args[@]}"
 }
 
 renew_one() {
@@ -444,9 +547,12 @@ renew_one() {
   read -rp "Force renewal even if not due? [y/N]: " force_ans
   [[ "$force_ans" =~ ^[Yy] ]] && force="yes"
   auto_stop="$(ask_auto_stop)"
+  local force_ipv4
+  preflight_acme_api || true
+  force_ipv4="$(ask_force_ipv4)"
   line
   info "Renewing: $domain"
-  if with_web_stop "$auto_stop" renew_cert_inner "$domain" "$ecc" "$force"; then
+  if with_web_stop "$auto_stop" with_optional_ipv4_curlrc "$force_ipv4" renew_cert_inner "$domain" "$ecc" "$force"; then
     ok "Renew done. Re-installing copy to $CERT_BASE..."
     install_cert_to_path "$domain" "${key:-ec-256}" && ok "Installed copy updated."
   else
@@ -458,7 +564,7 @@ renew_one() {
 renew_all_inner() {
   local force="$1" args=(--renew-all)
   [[ "$force" == "yes" ]] && args+=(--force)
-  "$ACME_BIN" "${args[@]}"
+  run_acme_logged "${args[@]}"
 }
 
 renew_all() {
@@ -468,9 +574,12 @@ renew_all() {
   read -rp "Force renew all certificates? [y/N]: " force_ans
   [[ "$force_ans" =~ ^[Yy] ]] && force="yes"
   auto_stop="$(ask_auto_stop)"
+  local force_ipv4
+  preflight_acme_api || true
+  force_ipv4="$(ask_force_ipv4)"
   line
   info "Running renew-all..."
-  if with_web_stop "$auto_stop" renew_all_inner "$force"; then
+  if with_web_stop "$auto_stop" with_optional_ipv4_curlrc "$force_ipv4" renew_all_inner "$force"; then
     ok "Renew-all finished."
   else
     err "Renew-all returned an error. Check output above."
@@ -494,12 +603,12 @@ remove_cert() {
   if [[ "$revoke_ans" =~ ^[Yy] ]]; then
     args=(--revoke -d "$domain")
     [[ "$ecc" == "yes" ]] && args+=(--ecc)
-    "$ACME_BIN" "${args[@]}" || warn "Revoke failed or was already invalid. Continuing with remove..."
+    run_acme_logged "${args[@]}" || warn "Revoke failed or was already invalid. Continuing with remove..."
   fi
 
   args=(--remove -d "$domain")
   [[ "$ecc" == "yes" ]] && args+=(--ecc)
-  "$ACME_BIN" "${args[@]}" || warn "acme.sh remove returned an error."
+  run_acme_logged "${args[@]}" || warn "acme.sh remove returned an error."
 
   if [[ -d "$CERT_BASE/$safe" ]]; then
     rm -rf "$CERT_BASE/$safe"
@@ -579,6 +688,8 @@ diagnostics() {
   say "${C_BOLD}Port 443 owner${C_RESET}"
   port_owner 443 || true
   echo
+  preflight_acme_api || true
+  echo
   read -rp "Enter a domain to check DNS/public IP, or leave blank: " d
   if [[ -n "$d" ]]; then
     echo
@@ -594,6 +705,46 @@ diagnostics() {
       echo
     fi
   fi
+  pause
+}
+
+network_repair() {
+  header
+  need_root
+  say "${C_BOLD}Network/TLS repair for ACME${C_RESET}"
+  line
+  info "Installing/updating curl, OpenSSL, CA certificates, and socat..."
+  if command_exists apt-get; then
+    DEBIAN_FRONTEND=noninteractive apt-get update -y || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y curl openssl ca-certificates socat
+    update-ca-certificates >/dev/null 2>&1 || true
+  elif command_exists dnf; then
+    dnf install -y curl openssl ca-certificates socat
+    update-ca-trust >/dev/null 2>&1 || true
+  elif command_exists yum; then
+    yum install -y curl openssl ca-certificates socat
+    update-ca-trust >/dev/null 2>&1 || true
+  elif command_exists apk; then
+    apk add --no-cache curl openssl ca-certificates socat
+    update-ca-certificates >/dev/null 2>&1 || true
+  else
+    warn "Unsupported package manager. Install curl openssl ca-certificates socat manually."
+  fi
+
+  if command_exists timedatectl; then
+    info "Enabling NTP time sync..."
+    timedatectl set-ntp true >/dev/null 2>&1 || true
+    timedatectl status | sed -n '1,8p' || true
+  fi
+
+  if [[ -x "$ACME_BIN" ]]; then
+    info "Upgrading acme.sh..."
+    "$ACME_BIN" --upgrade || true
+    "$ACME_BIN" --set-default-ca --server "$DEFAULT_CA" >/dev/null 2>&1 || true
+  fi
+
+  echo
+  preflight_acme_api || true
   pause
 }
 
@@ -645,6 +796,7 @@ main_menu() {
     say "${C_BOLD}9)${C_RESET} Install/Update local command: sslmgr"
     say "${C_BOLD}10)${C_RESET} Upgrade acme.sh"
     say "${C_BOLD}11)${C_RESET} Register/Update Let's Encrypt account email"
+    say "${C_BOLD}12)${C_RESET} Network/TLS repair & ACME preflight"
     say "${C_BOLD}0)${C_RESET} Exit"
     echo
     read -rp "Select an option: " choice
@@ -660,6 +812,7 @@ main_menu() {
       9) install_manager_command ;;
       10) upgrade_acme ;;
       11) register_account ;;
+      12) network_repair ;;
       0) exit 0 ;;
       *) warn "Invalid option"; sleep 1 ;;
     esac

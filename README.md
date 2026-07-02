@@ -2,7 +2,7 @@
 
 A modern Bash menu for managing SSL certificates on Linux servers with [`acme.sh`](https://github.com/acmesh-official/acme.sh).
 
-This script is designed for VPS/server admins who want a simple terminal menu to issue, renew, remove, inspect, and back up SSL certificates.
+This script is designed for VPS/server admins who want a simple terminal menu to issue, renew, remove, inspect, diagnose, repair, and back up SSL certificates.
 
 Repository:
 
@@ -10,15 +10,17 @@ Repository:
 https://github.com/0fariid0/acme-ssl-manager
 ```
 
+Current version: `1.1.0`
+
 ---
 
 ## Features
 
 - Modern English terminal menu with colored UI
 - Automatic `acme.sh` installation if missing
-- Automatic installation of required tools such as `socat` and `openssl`
+- Automatic installation of required tools such as `curl`, `openssl`, `ca-certificates`, and `socat`
 - View certificates managed by `acme.sh`
-- Show certificate expiration date and remaining days
+- Show certificate expiration date and remaining time
 - Show installed certificate paths
 - Issue new SSL certificates
 - Renew one certificate
@@ -26,7 +28,10 @@ https://github.com/0fariid0/acme-ssl-manager
 - Remove certificates from `acme.sh`
 - Optional revoke before removing
 - Backup installed certificates
-- Basic diagnostics for ports `80` and `443`
+- Diagnostics for ports `80` and `443`
+- ACME API connectivity preflight test
+- Network/TLS repair option for cURL/OpenSSL/CA certificate issues
+- Optional temporary Force IPv4 mode for ACME operations
 - Detect Apache, Nginx, Caddy, and HAProxy
 - Temporarily stop active web services before standalone SSL issuance
 - Restore only the services that were stopped by the script
@@ -115,6 +120,7 @@ chmod +x ssl-manager.sh
 9) Install/Update local command: sslmgr
 10) Upgrade acme.sh
 11) Register/Update Let's Encrypt account email
+12) Network/TLS repair & ACME preflight
 0) Exit
 ```
 
@@ -151,6 +157,58 @@ Example:
 ```bash
 /etc/acme-ssl-manager/certs/example.com/private.key
 /etc/acme-ssl-manager/certs/example.com/fullchain.pem
+```
+
+---
+
+## Troubleshooting: Could not get nonce / cURL error 35
+
+If you see an error like this:
+
+```text
+Could not get nonce
+Please refer to https://curl.haxx.se/libcurl/c/libcurl-errors.html for error code: 35
+Error creating new order. Le_OrderFinalize not found.
+```
+
+This usually means the server could not connect to the Let's Encrypt ACME API over HTTPS. It often happens because of one of these issues:
+
+- Broken or outdated CA certificates
+- Old curl/OpenSSL packages
+- Server time is wrong
+- IPv6 is broken, but the server tries IPv6 first
+- Provider firewall blocks outbound HTTPS to Let's Encrypt
+- Temporary Let's Encrypt/API connectivity issue
+
+Use this menu option first:
+
+```text
+12) Network/TLS repair & ACME preflight
+```
+
+Then try issuing the certificate again. If the preflight says IPv4 works but IPv6 fails, answer `y` when the script asks:
+
+```text
+Force IPv4 for outgoing ACME API requests? [y/N]: y
+```
+
+Manual repair commands for Debian/Ubuntu:
+
+```bash
+apt-get update
+apt-get install -y curl openssl ca-certificates socat
+update-ca-certificates
+timedatectl set-ntp true
+~/.acme.sh/acme.sh --upgrade
+~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+```
+
+Manual connectivity tests:
+
+```bash
+curl -Iv https://acme-v02.api.letsencrypt.org/directory
+curl -4Iv https://acme-v02.api.letsencrypt.org/directory
+curl -6Iv https://acme-v02.api.letsencrypt.org/directory
 ```
 
 ---
