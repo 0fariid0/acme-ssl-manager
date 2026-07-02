@@ -1,47 +1,51 @@
 #!/usr/bin/env bash
 # SSL Manager for acme.sh
-# GitHub-ready standalone Bash TUI
-# Author: your-name
+# Modern standalone Bash TUI
 # License: MIT
 
 set -o pipefail
 
 APP_NAME="ACME SSL Manager"
-APP_VERSION="1.3.0"
+APP_VERSION="1.5.0"
 ACME_HOME="${ACME_HOME:-$HOME/.acme.sh}"
 ACME_BIN="${ACME_BIN:-$ACME_HOME/acme.sh}"
 CERT_BASE="${CERT_BASE:-/etc/acme-ssl-manager/certs}"
 BACKUP_BASE="${BACKUP_BASE:-/etc/acme-ssl-manager/backups}"
 MANAGER_BIN="/usr/local/bin/sslmgr"
 DEFAULT_CA="letsencrypt"
-# Default one-click issuing settings. Advanced mode is still available from the menu.
+# Default one-click issuing settings. The public menu is intentionally minimal.
 DEFAULT_CHALLENGE_MODE="http"      # http = HTTP-01 standalone on port 80
 DEFAULT_KEY_LENGTH="ec-256"        # ECC ec-256
 DEFAULT_AUTO_STOP="yes"            # stop/restart active web services automatically
 WEB_SERVICES=(apache2 httpd nginx caddy haproxy)
 STOPPED_SERVICES=()
 
-# ---------- Colors ----------
-if [[ -t 1 ]]; then
-  C_RESET='\033[0m'
-  C_BOLD='\033[1m'
-  C_DIM='\033[2m'
-  C_RED='\033[31m'
-  C_GREEN='\033[32m'
-  C_YELLOW='\033[33m'
-  C_BLUE='\033[34m'
-  C_MAGENTA='\033[35m'
-  C_CYAN='\033[36m'
-  C_WHITE='\033[97m'
+# ---------- Modern color theme ----------
+# Set NO_COLOR=1 if you want plain output.
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+  C_RESET=$'\033[0m'
+  C_BOLD=$'\033[1m'
+  C_DIM=$'\033[2m'
+  C_RED=$'\033[38;5;196m'
+  C_GREEN=$'\033[38;5;82m'
+  C_YELLOW=$'\033[38;5;214m'
+  C_BLUE=$'\033[38;5;39m'
+  C_MAGENTA=$'\033[38;5;135m'
+  C_CYAN=$'\033[38;5;45m'
+  C_WHITE=$'\033[97m'
+  C_SOFT=$'\033[38;5;245m'
+  C_MUTED=$'\033[38;5;240m'
+  C_ACCENT=$'\033[38;5;45m'
+  C_ACCENT2=$'\033[38;5;99m'
 else
-  C_RESET=''; C_BOLD=''; C_DIM=''; C_RED=''; C_GREEN=''; C_YELLOW=''; C_BLUE=''; C_MAGENTA=''; C_CYAN=''; C_WHITE=''
+  C_RESET=''; C_BOLD=''; C_DIM=''; C_RED=''; C_GREEN=''; C_YELLOW=''; C_BLUE=''; C_MAGENTA=''; C_CYAN=''; C_WHITE=''; C_SOFT=''; C_MUTED=''; C_ACCENT=''; C_ACCENT2=''
 fi
 
 say() { echo -e "$*"; }
-ok() { say "${C_GREEN}[OK]${C_RESET} $*"; }
-info() { say "${C_CYAN}[INFO]${C_RESET} $*"; }
-warn() { say "${C_YELLOW}[WARN]${C_RESET} $*"; }
-err() { say "${C_RED}[ERR]${C_RESET} $*"; }
+ok() { say "${C_GREEN}${C_BOLD}[ OK ]${C_RESET} $*"; }
+info() { say "${C_ACCENT}${C_BOLD}[ .. ]${C_RESET} $*"; }
+warn() { say "${C_YELLOW}${C_BOLD}[ !! ]${C_RESET} $*"; }
+err() { say "${C_RED}${C_BOLD}[ XX ]${C_RESET} $*"; }
 
 pause() {
   echo
@@ -49,15 +53,26 @@ pause() {
 }
 
 line() {
-  say "${C_DIM}────────────────────────────────────────────────────────────${C_RESET}"
+  say "${C_MUTED}────────────────────────────────────────────────────────────────────────${C_RESET}"
+}
+
+mini_line() {
+  say "${C_MUTED}─ · ─ · ─ · ─ · ─ · ─ · ─ · ─ · ─ · ─ · ─ · ─ · ─ · ─ · ─ · ─${C_RESET}"
+}
+
+section() {
+  echo
+  say "${C_ACCENT}${C_BOLD}◢ $*${C_RESET}"
+  line
 }
 
 header() {
   clear 2>/dev/null || true
-  say "${C_CYAN}${C_BOLD}╔════════════════════════════════════════════════════════════╗${C_RESET}"
-  printf "${C_CYAN}${C_BOLD}║${C_RESET}  ${C_WHITE}${C_BOLD}%-54s${C_RESET} ${C_CYAN}${C_BOLD}║${C_RESET}\n" "$APP_NAME v$APP_VERSION"
-  say "${C_CYAN}${C_BOLD}╚════════════════════════════════════════════════════════════╝${C_RESET}"
-  say "${C_DIM}Managed cert path: $CERT_BASE${C_RESET}"
+  say "${C_ACCENT}${C_BOLD}╭────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  printf "${C_ACCENT}${C_BOLD}│${C_RESET}  ${C_WHITE}${C_BOLD}%-39s${C_RESET} ${C_ACCENT2}%-21s${C_RESET} ${C_ACCENT}${C_BOLD}│${C_RESET}\n" "$APP_NAME" "v$APP_VERSION"
+  printf "${C_ACCENT}${C_BOLD}│${C_RESET}  ${C_SOFT}%-63s${C_RESET} ${C_ACCENT}${C_BOLD}│${C_RESET}\n" "Modern acme.sh dashboard for issuing and renewing SSL"
+  say "${C_ACCENT}${C_BOLD}╰────────────────────────────────────────────────────────────────────╯${C_RESET}"
+  say "${C_SOFT}Managed cert path:${C_RESET} ${C_WHITE}$CERT_BASE${C_RESET}"
   echo
 }
 
@@ -263,7 +278,7 @@ run_acme_logged() {
     if grep -Eqi 'Could not get nonce|error code: 35|SSL connect|Le_OrderFinalize not found' "$tmp"; then
       echo
       err "acme.sh failed before domain validation. This is usually outbound HTTPS/TLS connectivity to Let's Encrypt."
-      warn "The script already tested ACME API before this step. Run option 12 and check provider firewall/DNS/TLS if this repeats."
+      warn "The script already tested ACME API before this step. Check provider firewall/DNS/TLS if this repeats."
     fi
   fi
   rm -f "$tmp"
@@ -392,6 +407,21 @@ left_color() {
   fi
 }
 
+status_badge() {
+  local left="$1"
+  if [[ "$left" == "expired" ]]; then
+    echo -e "${C_RED}${C_BOLD}EXPIRED${C_RESET}"
+  elif [[ "$left" =~ ^([0-9]+)d ]]; then
+    local d="${BASH_REMATCH[1]}"
+    if (( d <= 7 )); then echo -e "${C_RED}${C_BOLD}CRITICAL${C_RESET}"
+    elif (( d <= 20 )); then echo -e "${C_YELLOW}${C_BOLD}SOON${C_RESET}"
+    else echo -e "${C_GREEN}${C_BOLD}ACTIVE${C_RESET}"
+    fi
+  else
+    echo -e "${C_YELLOW}${C_BOLD}CHECK${C_RESET}"
+  fi
+}
+
 collect_acme_confs() {
   find "$ACME_HOME" -mindepth 2 -maxdepth 2 -type f -name "*.conf" 2>/dev/null | while read -r conf; do
     local domain
@@ -420,6 +450,52 @@ print_acme_table() {
       printf "     ${C_DIM}SAN: %s${C_RESET}\n" "$alt"
     fi
   done < <(collect_acme_confs)
+}
+
+print_cert_status_summary() {
+  say "${C_ACCENT}${C_BOLD}╭─ Certificates Dashboard${C_RESET}"
+  line
+  local found=0 healthy=0 soon=0 expired=0 check=0
+  local rows=() conf domain key cert_file left exp status
+
+  while IFS= read -r conf; do
+    domain="$(conf_value "$conf" Le_Domain)"
+    key="$(conf_value "$conf" Le_Keylength)"
+    cert_file="$(cert_file_from_domain "$domain")"
+    left="$(cert_left_human "$cert_file")"
+    exp="$(cert_expiry_human "$cert_file")"
+    [[ -z "$key" ]] && key="unknown"
+
+    ((found++)) || true
+    if [[ "$left" == "expired" ]]; then
+      ((expired++)) || true
+    elif [[ "$left" =~ ^([0-9]+)d ]]; then
+      if (( BASH_REMATCH[1] <= 20 )); then ((soon++)) || true; else ((healthy++)) || true; fi
+    else
+      ((check++)) || true
+    fi
+    rows+=("$domain|$key|$left|$exp")
+  done < <(collect_acme_confs)
+
+  if (( found == 0 )); then
+    say "  ${C_MUTED}╭────────────────────────────────────────────────────────────╮${C_RESET}"
+    say "  ${C_MUTED}│${C_RESET} ${C_YELLOW}${C_BOLD}No managed certificates found yet.${C_RESET}                       ${C_MUTED}│${C_RESET}"
+    say "  ${C_MUTED}│${C_RESET} ${C_SOFT}Use option 2 to issue your first SSL certificate.${C_RESET}        ${C_MUTED}│${C_RESET}"
+    say "  ${C_MUTED}╰────────────────────────────────────────────────────────────╯${C_RESET}"
+    echo
+    return 0
+  fi
+
+  printf "  ${C_SOFT}Managed:${C_RESET} ${C_WHITE}${C_BOLD}%-3s${C_RESET}  ${C_GREEN}Active:%-3s${C_RESET}  ${C_YELLOW}Soon:%-3s${C_RESET}  ${C_RED}Expired:%-3s${C_RESET}  ${C_SOFT}Check:%-3s${C_RESET}\n" "$found" "$healthy" "$soon" "$expired" "$check"
+  mini_line
+  printf "  ${C_BOLD}%-3s %-31s %-9s %-14s %-10s %s${C_RESET}\n" "#" "Domain" "Key" "Remaining" "Status" "Expires"
+  local i=0 row
+  for row in "${rows[@]}"; do
+    ((i++)) || true
+    IFS='|' read -r domain key left exp <<< "$row"
+    printf "  ${C_MUTED}%-3s${C_RESET} %-31s %-9s %-22b %-18b %s\n" "$i" "$domain" "$key" "$(left_color "$left")" "$(status_badge "$left")" "$exp"
+  done
+  echo
 }
 
 list_certs() {
@@ -555,10 +631,9 @@ issue_cert_core() {
 issue_cert() {
   header
   ensure_acme || { pause; return; }
-  say "${C_BOLD}Quick issue certificate${C_RESET}"
-  line
-  say "This mode asks only for domain(s)."
-  say "Defaults: HTTP-01 on port 80, ECC ec-256, auto-stop Apache/Nginx/Caddy/HAProxy."
+  section "Quick Issue"
+  say "${C_SOFT}Only enter domain(s). Everything else is handled automatically.${C_RESET}"
+  say "${C_SOFT}Defaults: HTTP-01 port 80, ECC ec-256, auto-stop web services.${C_RESET}"
   echo
   read -rp "Enter domain(s), separated by space or comma: " raw_domains
   issue_cert_core "$raw_domains" "$DEFAULT_CHALLENGE_MODE" "$DEFAULT_KEY_LENGTH" "$DEFAULT_AUTO_STOP" yes
@@ -637,14 +712,12 @@ renew_cert_inner() {
 renew_one() {
   header
   ensure_acme || { pause; return; }
-  local conf domain key auto_stop force_ans force="no" ecc="no"
+  local conf domain key auto_stop force="no" ecc="no"
   select_acme_cert conf || { pause; return; }
   domain="$(conf_value "$conf" Le_Domain)"
   key="$(conf_value "$conf" Le_Keylength)"
   is_ecc_conf "$conf" && ecc="yes"
-  read -rp "Force renewal even if not due? [y/N]: " force_ans
-  [[ "$force_ans" =~ ^[Yy] ]] && force="yes"
-  auto_stop="$(ask_auto_stop)"
+  auto_stop="$DEFAULT_AUTO_STOP"
   local ipmode
   if ! prepare_acme_network_or_abort yes; then
     echo
@@ -657,6 +730,7 @@ renew_one() {
   [[ "$ipmode" == "v4" ]] && ok "IPv4-only ACME mode enabled automatically: acme.sh --request-v4"
   line
   info "Renewing: $domain"
+  info "Defaults: normal acme.sh renew, auto-stop web services enabled"
   if with_web_stop "$auto_stop" renew_cert_inner "$domain" "$ecc" "$force" "$ipmode"; then
     ok "Renew done. Re-installing copy to $CERT_BASE..."
     install_cert_to_path "$domain" "${key:-ec-256}" && ok "Installed copy updated."
@@ -749,8 +823,7 @@ show_paths() {
   header
   ensure_acme || { pause; return; }
   local conf domain safe
-  say "${C_BOLD}Certificate paths for panels/apps${C_RESET}"
-  line
+  section "Certificate Paths"
   while IFS= read -r conf; do
     domain="$(conf_value "$conf" Le_Domain)"
     safe="$(safe_domain_name "$domain")"
@@ -894,40 +967,44 @@ register_account() {
   pause
 }
 
+startup_preflight_once() {
+  header
+  ensure_acme || {
+    warn "Startup checks skipped because acme.sh is not ready."
+    sleep 1
+    return 0
+  }
+  section "Startup Checks"
+  info "Checking ACME API, nonce endpoint, TLS certificates, and system time..."
+  if prepare_acme_network_or_abort yes; then
+    ok "Startup checks passed."
+  else
+    warn "Startup checks failed. The menu will open, but issue/renew will stop until outbound ACME connectivity is fixed."
+  fi
+  sleep 1
+}
+
 main_menu() {
   need_root
+  startup_preflight_once
   while true; do
     header
-    say "${C_BOLD}1)${C_RESET} View certificates and remaining time"
-    say "${C_BOLD}2)${C_RESET} Quick issue certificate (default)"
-    say "${C_BOLD}3)${C_RESET} Advanced issue certificate"
-    say "${C_BOLD}4)${C_RESET} Renew one certificate"
-    say "${C_BOLD}5)${C_RESET} Renew all certificates"
-    say "${C_BOLD}6)${C_RESET} Remove certificate"
-    say "${C_BOLD}7)${C_RESET} Show cert/key paths"
-    say "${C_BOLD}8)${C_RESET} Backup certificates"
-    say "${C_BOLD}9)${C_RESET} Diagnostics"
-    say "${C_BOLD}10)${C_RESET} Install/Update local command: sslmgr"
-    say "${C_BOLD}11)${C_RESET} Upgrade acme.sh"
-    say "${C_BOLD}12)${C_RESET} Register/Update Let's Encrypt account email"
-    say "${C_BOLD}13)${C_RESET} Network/TLS repair & ACME preflight"
-    say "${C_BOLD}0)${C_RESET} Exit"
+    print_cert_status_summary
+    say "${C_ACCENT}${C_BOLD}╭─ Actions${C_RESET}"
+    line
+    printf "  ${C_ACCENT}${C_BOLD}[%2s]${C_RESET}  %-30s ${C_SOFT}%s${C_RESET}\n" "2"  "Quick issue certificate" "default, one-question SSL issue"
+    printf "  ${C_ACCENT}${C_BOLD}[%2s]${C_RESET}  %-30s ${C_SOFT}%s${C_RESET}\n" "4"  "Renew one certificate" "pick a domain and renew"
+    printf "  ${C_ACCENT}${C_BOLD}[%2s]${C_RESET}  %-30s ${C_SOFT}%s${C_RESET}\n" "7"  "Show cert/key paths" "copy paths for panels"
+    printf "  ${C_ACCENT}${C_BOLD}[%2s]${C_RESET}  %-30s ${C_SOFT}%s${C_RESET}\n" "11" "Upgrade acme.sh" "update the ACME client"
+    printf "  ${C_MUTED}${C_BOLD}[%2s]${C_RESET}  %-30s ${C_SOFT}%s${C_RESET}\n" "0"  "Exit" "close manager"
     echo
-    read -rp "Select an option: " choice
+    printf "${C_ACCENT}${C_BOLD}Select option:${C_RESET} "
+    read -r choice
     case "$choice" in
-      1) list_certs ;;
       2) issue_cert ;;
-      3) issue_cert_advanced ;;
       4) renew_one ;;
-      5) renew_all ;;
-      6) remove_cert ;;
       7) show_paths ;;
-      8) backup_certs ;;
-      9) diagnostics ;;
-      10) install_manager_command ;;
       11) upgrade_acme ;;
-      12) register_account ;;
-      13) network_repair ;;
       0) exit 0 ;;
       *) warn "Invalid option"; sleep 1 ;;
     esac
