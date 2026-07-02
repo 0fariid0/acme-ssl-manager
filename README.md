@@ -6,32 +6,33 @@
 
 ---
 
-## شروع سریع
+#### اجرای مستقیم از گیت‌هاب
 
-### اجرای مستقیم از گیت‌هاب
-
-بعد از آپلود فایل `ssl-manager.sh` روی گیت‌هاب، لینک Raw همان فایل را بردار و به‌جای `RAW_FILE_URL` بگذار:
+بعد از آپلود فایل‌ها روی گیت‌هاب، روی سرور بزن:
 
 ```bash
-bash <(curl -Ls RAW_FILE_URL)
+bash <(curl -Ls https://raw.githubusercontent.com/0fariid0/acme-ssl-manager/main/ssl-manager.sh)
 ```
 
-نمونه نصب دائمی از Raw:
+---
+
+## نصب به‌صورت دستور دائمی
+
+برای اینکه بعداً فقط با دستور `sslmgr` اجرا شود:
 
 ```bash
-curl -Ls -o /usr/local/bin/sslmgr RAW_FILE_URL
+curl -Ls -o /usr/local/bin/sslmgr https://raw.githubusercontent.com/0fariid0/acme-ssl-manager/main/ssl-manager.sh
 chmod +x /usr/local/bin/sslmgr
 sslmgr
 ```
 
-### اجرای لوکال روی سرور
-
-اگر فایل را مستقیم روی سرور داری:
+بعد از نصب، هر وقت خواستی منو باز شود:
 
 ```bash
-chmod +x ssl-manager.sh
-sudo ./ssl-manager.sh
+sslmgr
 ```
+
+---
 
 یا:
 
