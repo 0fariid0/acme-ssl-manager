@@ -6,7 +6,7 @@
 set -o pipefail
 
 APP_NAME="ACME SSL Manager"
-APP_VERSION="1.6.0"
+APP_VERSION="1.7.0"
 ACME_HOME="${ACME_HOME:-$HOME/.acme.sh}"
 ACME_BIN="${ACME_BIN:-$ACME_HOME/acme.sh}"
 CERT_BASE="${CERT_BASE:-/etc/acme-ssl-manager/certs}"
@@ -1025,6 +1025,7 @@ main_menu() {
     printf "  ${C_ACCENT}${C_BOLD}[%2s]${C_RESET}  %-30s ${C_SOFT}%s${C_RESET}\n" "2"  "Renew one certificate" "pick a domain and renew"
     printf "  ${C_ACCENT}${C_BOLD}[%2s]${C_RESET}  %-30s ${C_SOFT}%s${C_RESET}\n" "3"  "Show cert/key paths" "copy paths for panels"
     printf "  ${C_ACCENT}${C_BOLD}[%2s]${C_RESET}  %-30s ${C_SOFT}%s${C_RESET}\n" "4"  "Upgrade acme.sh" "update the ACME client"
+    printf "  ${C_RED}${C_BOLD}[%2s]${C_RESET}  %-30s ${C_SOFT}%s${C_RESET}\n" "5"  "Remove certificate" "delete a managed SSL certificate"
     printf "  ${C_MUTED}${C_BOLD}[%2s]${C_RESET}  %-30s ${C_SOFT}%s${C_RESET}\n" "0"  "Exit" "close manager"
     echo
     printf "${C_ACCENT}${C_BOLD}Select option:${C_RESET} "
@@ -1034,6 +1035,7 @@ main_menu() {
       2) renew_one ;;
       3) show_paths ;;
       4) upgrade_acme ;;
+      5) remove_cert ;;
       0) exit 0 ;;
       *) warn "Invalid option"; sleep 1 ;;
     esac
@@ -1055,6 +1057,10 @@ case "${1:-}" in
   issue|quick|--issue)
     shift
     quick_issue_from_cli "$@"
+    ;;
+  remove|delete|--remove)
+    shift
+    remove_cert
     ;;
   help|--help|-h)
     echo "$APP_NAME v$APP_VERSION"
