@@ -6,7 +6,7 @@
 set -o pipefail
 
 APP_NAME="ACME SSL Manager"
-APP_VERSION="1.5.0"
+APP_VERSION="1.6.0"
 ACME_HOME="${ACME_HOME:-$HOME/.acme.sh}"
 ACME_BIN="${ACME_BIN:-$ACME_HOME/acme.sh}"
 CERT_BASE="${CERT_BASE:-/etc/acme-ssl-manager/certs}"
@@ -456,7 +456,7 @@ print_cert_status_summary() {
   say "${C_ACCENT}${C_BOLD}╭─ Certificates Dashboard${C_RESET}"
   line
   local found=0 healthy=0 soon=0 expired=0 check=0
-  local rows=() conf domain key cert_file left exp status
+  local rows=() conf domain key cert_file left exp
 
   while IFS= read -r conf; do
     domain="$(conf_value "$conf" Le_Domain)"
@@ -480,7 +480,7 @@ print_cert_status_summary() {
   if (( found == 0 )); then
     say "  ${C_MUTED}╭────────────────────────────────────────────────────────────╮${C_RESET}"
     say "  ${C_MUTED}│${C_RESET} ${C_YELLOW}${C_BOLD}No managed certificates found yet.${C_RESET}                       ${C_MUTED}│${C_RESET}"
-    say "  ${C_MUTED}│${C_RESET} ${C_SOFT}Use option 2 to issue your first SSL certificate.${C_RESET}        ${C_MUTED}│${C_RESET}"
+    say "  ${C_MUTED}│${C_RESET} ${C_SOFT}Use option 1 to issue your first SSL certificate.${C_RESET}        ${C_MUTED}│${C_RESET}"
     say "  ${C_MUTED}╰────────────────────────────────────────────────────────────╯${C_RESET}"
     echo
     return 0
@@ -489,11 +489,40 @@ print_cert_status_summary() {
   printf "  ${C_SOFT}Managed:${C_RESET} ${C_WHITE}${C_BOLD}%-3s${C_RESET}  ${C_GREEN}Active:%-3s${C_RESET}  ${C_YELLOW}Soon:%-3s${C_RESET}  ${C_RED}Expired:%-3s${C_RESET}  ${C_SOFT}Check:%-3s${C_RESET}\n" "$found" "$healthy" "$soon" "$expired" "$check"
   mini_line
   printf "  ${C_BOLD}%-3s %-31s %-9s %-14s %-10s %s${C_RESET}\n" "#" "Domain" "Key" "Remaining" "Status" "Expires"
-  local i=0 row
+  say "  ${C_MUTED}─── ─────────────────────────────── ───────── ────────────── ────────── ─────────────────────────${C_RESET}"
+
+  local i=0 row status status_color remaining_color days
   for row in "${rows[@]}"; do
     ((i++)) || true
     IFS='|' read -r domain key left exp <<< "$row"
-    printf "  ${C_MUTED}%-3s${C_RESET} %-31s %-9s %-22b %-18b %s\n" "$i" "$domain" "$key" "$(left_color "$left")" "$(status_badge "$left")" "$exp"
+
+    status="CHECK"
+    status_color="$C_YELLOW"
+    remaining_color="$C_YELLOW"
+
+    if [[ "$left" == "expired" ]]; then
+      status="EXPIRED"
+      status_color="$C_RED"
+      remaining_color="$C_RED"
+    elif [[ "$left" =~ ^([0-9]+)d ]]; then
+      days="${BASH_REMATCH[1]}"
+      if (( days <= 7 )); then
+        status="CRITICAL"
+        status_color="$C_RED"
+        remaining_color="$C_RED"
+      elif (( days <= 20 )); then
+        status="SOON"
+        status_color="$C_YELLOW"
+        remaining_color="$C_YELLOW"
+      else
+        status="ACTIVE"
+        status_color="$C_GREEN"
+        remaining_color="$C_GREEN"
+      fi
+    fi
+
+    printf "  ${C_MUTED}%-3s${C_RESET} %-31.31s %-9s ${remaining_color}%-14s${C_RESET} ${status_color}${C_BOLD}%-10s${C_RESET} %s\n" \
+      "$i" "$domain" "$key" "$left" "$status" "$exp"
   done
   echo
 }
@@ -992,19 +1021,19 @@ main_menu() {
     print_cert_status_summary
     say "${C_ACCENT}${C_BOLD}╭─ Actions${C_RESET}"
     line
-    printf "  ${C_ACCENT}${C_BOLD}[%2s]${C_RESET}  %-30s ${C_SOFT}%s${C_RESET}\n" "2"  "Quick issue certificate" "default, one-question SSL issue"
-    printf "  ${C_ACCENT}${C_BOLD}[%2s]${C_RESET}  %-30s ${C_SOFT}%s${C_RESET}\n" "4"  "Renew one certificate" "pick a domain and renew"
-    printf "  ${C_ACCENT}${C_BOLD}[%2s]${C_RESET}  %-30s ${C_SOFT}%s${C_RESET}\n" "7"  "Show cert/key paths" "copy paths for panels"
-    printf "  ${C_ACCENT}${C_BOLD}[%2s]${C_RESET}  %-30s ${C_SOFT}%s${C_RESET}\n" "11" "Upgrade acme.sh" "update the ACME client"
+    printf "  ${C_ACCENT}${C_BOLD}[%2s]${C_RESET}  %-30s ${C_SOFT}%s${C_RESET}\n" "1"  "Quick issue certificate" "default, one-question SSL issue"
+    printf "  ${C_ACCENT}${C_BOLD}[%2s]${C_RESET}  %-30s ${C_SOFT}%s${C_RESET}\n" "2"  "Renew one certificate" "pick a domain and renew"
+    printf "  ${C_ACCENT}${C_BOLD}[%2s]${C_RESET}  %-30s ${C_SOFT}%s${C_RESET}\n" "3"  "Show cert/key paths" "copy paths for panels"
+    printf "  ${C_ACCENT}${C_BOLD}[%2s]${C_RESET}  %-30s ${C_SOFT}%s${C_RESET}\n" "4"  "Upgrade acme.sh" "update the ACME client"
     printf "  ${C_MUTED}${C_BOLD}[%2s]${C_RESET}  %-30s ${C_SOFT}%s${C_RESET}\n" "0"  "Exit" "close manager"
     echo
     printf "${C_ACCENT}${C_BOLD}Select option:${C_RESET} "
     read -r choice
     case "$choice" in
-      2) issue_cert ;;
-      4) renew_one ;;
-      7) show_paths ;;
-      11) upgrade_acme ;;
+      1) issue_cert ;;
+      2) renew_one ;;
+      3) show_paths ;;
+      4) upgrade_acme ;;
       0) exit 0 ;;
       *) warn "Invalid option"; sleep 1 ;;
     esac

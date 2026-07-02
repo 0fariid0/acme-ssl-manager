@@ -6,6 +6,50 @@
 
 ---
 
+## شروع سریع
+
+### اجرای مستقیم از گیت‌هاب
+
+بعد از آپلود فایل `ssl-manager.sh` روی گیت‌هاب، لینک Raw همان فایل را بردار و به‌جای `RAW_FILE_URL` بگذار:
+
+```bash
+bash <(curl -Ls RAW_FILE_URL)
+```
+
+نمونه نصب دائمی از Raw:
+
+```bash
+curl -Ls -o /usr/local/bin/sslmgr RAW_FILE_URL
+chmod +x /usr/local/bin/sslmgr
+sslmgr
+```
+
+### اجرای لوکال روی سرور
+
+اگر فایل را مستقیم روی سرور داری:
+
+```bash
+chmod +x ssl-manager.sh
+sudo ./ssl-manager.sh
+```
+
+یا:
+
+```bash
+sudo bash ssl-manager.sh
+```
+
+### نصب لوکال به‌صورت دستور دائمی
+
+برای اینکه بعداً فقط با دستور `sslmgr` اجرا شود:
+
+```bash
+sudo install -m 755 ssl-manager.sh /usr/local/bin/sslmgr
+sslmgr
+```
+
+---
+
 ## امکانات اصلی
 
 - گرفتن SSL فقط با وارد کردن دامنه
@@ -20,15 +64,15 @@
 
 ---
 
-## ظاهر جدید منو
+## ظاهر منو
 
-در نسخه جدید منو سبک‌تر و شیک‌تر شده و فقط گزینه‌های ضروری نمایش داده می‌شود:
+منو فقط گزینه‌های ضروری را دارد و شماره‌ها مرتب هستند:
 
 ```text
-[ 2]  Quick issue certificate       default, one-question SSL issue
-[ 4]  Renew one certificate         pick a domain and renew
-[ 7]  Show cert/key paths           copy paths for panels
-[11]  Upgrade acme.sh               update the ACME client
+[ 1]  Quick issue certificate       default, one-question SSL issue
+[ 2]  Renew one certificate         pick a domain and renew
+[ 3]  Show cert/key paths           copy paths for panels
+[ 4]  Upgrade acme.sh               update the ACME client
 [ 0]  Exit                          close manager
 ```
 
@@ -44,58 +88,16 @@ Certificates Dashboard
   2   sub.example.com                 ec-256    12d 1h         SOON       2026-07-14 09:30:00 UTC
 ```
 
-اگر هنوز SSL نگرفته باشی، بالای منو پیام راهنما نمایش داده می‌شود و گزینه 2 برای گرفتن اولین SSL معرفی می‌شود.
-
----
-
-## نصب و اجرا
-
-### اجرای مستقیم فایل روی سرور
-
-```bash
-chmod +x ssl-manager.sh
-sudo ./ssl-manager.sh
-```
-
-یا:
-
-```bash
-sudo bash ssl-manager.sh
-```
-
-### نصب به‌صورت دستور دائمی
-
-برای اینکه بعداً فقط با دستور `sslmgr` اجرا شود:
-
-```bash
-sudo install -m 755 ssl-manager.sh /usr/local/bin/sslmgr
-sslmgr
-```
-
-### اجرا از Raw فایل گیت‌هاب
-
-بعد از آپلود فایل روی گیت‌هاب، لینک Raw فایل `ssl-manager.sh` را بردار و به‌جای `RAW_FILE_URL` بگذار:
-
-```bash
-bash <(curl -Ls RAW_FILE_URL)
-```
-
-برای نصب دائمی از Raw:
-
-```bash
-curl -Ls -o /usr/local/bin/sslmgr RAW_FILE_URL
-chmod +x /usr/local/bin/sslmgr
-sslmgr
-```
+اگر هنوز SSL نگرفته باشی، بالای منو پیام راهنما نمایش داده می‌شود و گزینه 1 برای گرفتن اولین SSL معرفی می‌شود.
 
 ---
 
 ## گرفتن SSL سریع
 
-از منو گزینه 2 را بزن:
+از منو گزینه 1 را بزن:
 
 ```text
-[ 2] Quick issue certificate
+[ 1] Quick issue certificate
 ```
 
 بعد فقط دامنه را وارد کن:
@@ -149,10 +151,10 @@ sslmgr issue example.com www.example.com sub.example.com
 
 ## تمدید یک SSL
 
-از منو گزینه 4 را بزن:
+از منو گزینه 2 را بزن:
 
 ```text
-[ 4] Renew one certificate
+[ 2] Renew one certificate
 ```
 
 بعد از نمایش لیست SSLها، شماره دامنه را انتخاب کن.
@@ -169,10 +171,10 @@ sslmgr issue example.com www.example.com sub.example.com
 
 ## نمایش مسیر فایل‌های SSL
 
-از منو گزینه 7 را بزن:
+از منو گزینه 3 را بزن:
 
 ```text
-[ 7] Show cert/key paths
+[ 3] Show cert/key paths
 ```
 
 مسیرهای اصلی برای x-ui، 3x-ui، HAProxy، Nginx یا پنل‌ها معمولاً این‌ها هستند:
@@ -193,10 +195,10 @@ sslmgr issue example.com www.example.com sub.example.com
 
 ## آپدیت acme.sh
 
-از منو گزینه 11 را بزن:
+از منو گزینه 4 را بزن:
 
 ```text
-[11] Upgrade acme.sh
+[ 4] Upgrade acme.sh
 ```
 
 این گزینه فقط خود `acme.sh` را آپدیت می‌کند.
